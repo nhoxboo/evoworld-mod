@@ -9,8 +9,8 @@
 // @match        https://flyordie.io/*
 // @match        https://*.flyordie.io/*
 // @icon         https://evoworld.io/favicon.ico
-// @updateURL    https://raw.githubusercontent.com/nhoxboo/evoworld-mod/main/evoworld-mod.user.js
-// @downloadURL  https://raw.githubusercontent.com/nhoxboo/evoworld-mod/main/evoworld-mod.user.js
+// @updateURL    https://raw.githubusercontent.com/nhoxboo/evoworld-mod/master/evoworld-mod.user.js
+// @downloadURL  https://raw.githubusercontent.com/nhoxboo/evoworld-mod/master/evoworld-mod.user.js
 // @grant        none
 // @run-at       document-start
 // ==/UserScript==
