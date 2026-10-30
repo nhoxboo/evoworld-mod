@@ -1,8 +1,8 @@
 // ==UserScript==
-// @name         EvoWorld.io Pro Mod & Multi-Tool Suite (FlyOrDie.io)
+// @name         EvoWorld.io Pro Mod & Ultimate Cheat Suite (FlyOrDie.io)
 // @namespace    https://github.com/nhoxboo/evoworld-mod
-// @version      1.0.0
-// @description  Full-featured Mod Suite cho EvoWorld.io (FlyOrDie.io): Mở khóa Camera Free Zoom, Tầm nhìn xuyên bóng tối (Night Vision / No Darkness), ESP Radar quét kẻ địch & Thức ăn, Cảnh báo Thiên Địch (Predator Alert), Hiển thị Box / Hitbox / ESP Khoảng Cách & Máu, Auto Water & Low Water Warning, HUD Tuỳ Chỉnh Hiện Đại (White-Blue Theme).
+// @version      2.0.0
+// @description  Bản Nâng Cấp Toàn Diện v2.0 cho EvoWorld.io (FlyOrDie.io): Free Zoom 0.25x-3.5x, Night Vision không giới hạn, ESP Radar kẻ địch & thức ăn, Cảnh báo Thiên Địch & Cứu Nguy Khẩn Cấp, Laser Aim Guide, Auto-Skill khi máu thấp, Auto Boost Macro, Lọc Thức Ăn High-EXP, Boss & Safezone Radar, Anti-Tab Throttle & Modern White-Blue HUD.
 // @author       Beso & Anh Nam
 // @match        https://evoworld.io/*
 // @match        https://*.evoworld.io/*
@@ -18,23 +18,38 @@
 (function () {
     'use strict';
 
-    console.log('[EvoWorld-Mod] Đang khởi động Mod Suite tại document-start...');
+    console.log('[EvoWorld-Mod-v2] 🚀 Đang khởi động Mod Suite Toàn Diện v2.0...');
 
     // =========================================================================
     // 1. CẤU HÌNH & TRẠNG THÁI (STATE & SETTINGS)
     // =========================================================================
-    const STORAGE_KEY = 'evoworld_mod_settings_v1';
+    const STORAGE_KEY = 'evoworld_mod_settings_v2';
     const defaultSettings = {
+        // Visual & Zoom
         freeZoom: true,
         customZoom: 1.0,
         minZoom: 0.25,
         maxZoom: 3.5,
         noDarkness: true,
+        showHitboxes: false,
+
+        // ESP & Radar
         predatorAlert: true,
         foodRadar: true,
         espPlayers: true,
-        showHitboxes: false,
-        showBossTimer: true,
+        espDistance: true,
+        laserAim: true,
+        highExpFilter: true,
+        showSafeZones: true,
+
+        // Automation & Combat Assist
+        autoSkillEmergency: true,
+        autoSkillHpPercent: 35,
+        autoBoostMacro: false,
+        emergencyWaterAlert: true,
+        emergencyWaterThreshold: 25,
+
+        // System
         antiThrottle: true,
         menuVisible: true
     };
@@ -53,12 +68,16 @@
         } catch (e) {}
     }
 
-    // Biến toàn cục hứng Engine instance & game state
+    // Biến toàn cục hứng Engine instance, Socket & Game state
     let gameInstance = null;
     let isHooked = false;
+    let lastAutoSkillTime = 0;
+    let lastBoostToggleTime = 0;
+    let autoBoostActive = false;
+    let isHoldingRightClick = false;
 
     // =========================================================================
-    // 2. ANTI-TAB THROTTLE (Chạy ngầm mượt mà không bị trình duyệt bóp xung)
+    // 2. ANTI-TAB THROTTLE (Chạy ngầm mượt mà không bị trình duyệt bóp FPS)
     // =========================================================================
     if (settings.antiThrottle) {
         try {
@@ -72,13 +91,12 @@
     }
 
     // =========================================================================
-    // 3. ENGINE PROTOTYPE HOOKING (Bắt lõi Engine & cài đặt tính năng gian lận/hỗ trợ)
+    // 3. ENGINE PROTOTYPE HOOKING (Bắt lõi Engine & cài đặt tính năng sâu)
     // =========================================================================
-
     function hookEngine(EngineClass) {
-        if (!EngineClass || !EngineClass.prototype || EngineClass.prototype.__evo_mod_hooked) return;
-        EngineClass.prototype.__evo_mod_hooked = true;
-        console.log('[EvoWorld-Mod] 🎯 Đang hook vào Engine.prototype...');
+        if (!EngineClass || !EngineClass.prototype || EngineClass.prototype.__evo_mod_v2_hooked) return;
+        EngineClass.prototype.__evo_mod_v2_hooked = true;
+        console.log('[EvoWorld-Mod] 🎯 Đang hook vào Engine.prototype v2...');
 
         // 3.1 Hook initCanvas để bắt game instance ngay khi game khởi động
         const origInitCanvas = EngineClass.prototype.initCanvas;
@@ -95,7 +113,6 @@
             window.__EVO_GAME__ = this;
 
             if (settings.freeZoom) {
-                // Cho phép thu phóng thoải mái từ 0.25 (nhìn siêu rộng toàn bản đồ) đến 3.5 (zoom cực gần)
                 val = Math.max(settings.minZoom, Math.min(settings.maxZoom, val));
             } else {
                 val = Math.max(1, Math.min(2, val));
@@ -130,27 +147,28 @@
             }
         };
 
-        // 3.3 Hook drawObjects để render lớp ESP Overlay cao cấp sau khi game vẽ xong
+        // 3.3 Hook drawObjects để render lớp ESP Overlay & Trajectory sau khi game vẽ
         const origDrawObjects = EngineClass.prototype.drawObjects;
         EngineClass.prototype.drawObjects = function () {
             gameInstance = this;
             window.__EVO_GAME__ = this;
 
-            // Bật cờ vẽ Hitbox của game nếu người dùng muốn
+            // Bật cờ vẽ Hitbox của game
             this.drawColliders = !!settings.showHitboxes;
 
             // Gọi hàm render gốc của game
             origDrawObjects.apply(this, arguments);
 
-            // Vẽ thêm Custom Radar, ESP Lines, Tên, Cảnh báo Thiên Địch
+            // Chạy automation loop & render custom overlays
             try {
+                runAutomationLoop(this);
                 renderCustomESP(this);
             } catch (err) {
                 // Tránh throw lỗi làm ngắt nhịp render game
             }
         };
 
-        console.log('[EvoWorld-Mod] ✅ Đã hoàn tất hook Engine.prototype!');
+        console.log('[EvoWorld-Mod] ✅ Đã hoàn tất hook Engine.prototype v2!');
         isHooked = true;
     }
 
@@ -163,13 +181,11 @@
     }, 20);
 
     // =========================================================================
-    // 4. BYPASS NIGHT VISION / NO DARKNESS (Bỏ tối / Sáng không giới hạn)
+    // 4. NIGHT VISION / NO DARKNESS (Bỏ tối / Sáng không giới hạn)
     // =========================================================================
-    // Can thiệp vào Canvas context 2D để triệt tiêu lớp phủ bóng tối của darknessCanvas
     const origDrawImage = CanvasRenderingContext2D.prototype.drawImage;
     CanvasRenderingContext2D.prototype.drawImage = function (img) {
         if (settings.noDarkness) {
-            // Kiểm tra nếu canvas đang vẽ là darknessCanvas
             if (img && img.tagName === 'CANVAS') {
                 if (img.width && img.height && (img.id === 'darknessCanvas' || (window.darknessCanvas && img === window.darknessCanvas))) {
                     return; // Chặn triệt để lệnh vẽ bóng tối!
@@ -185,7 +201,6 @@
     window.addEventListener('wheel', function (e) {
         if (!settings.freeZoom || !gameInstance || !window.joinedGame) return;
 
-        // Bắt sự kiện lăn chuột để chỉnh game.zoom thoải mái
         const delta = e.deltaY > 0 ? -0.1 : 0.1;
         let newZoom = Math.round(((gameInstance.zoom || 1.0) + delta) * 100) / 100;
         newZoom = Math.max(settings.minZoom, Math.min(settings.maxZoom, newZoom));
@@ -199,7 +214,85 @@
     }, { passive: true });
 
     // =========================================================================
-    // 6. ESP OVERLAY, RADAR THỨC ĂN & CẢNH BÁO THIÊN ĐỊCH (PREDATOR ALERT)
+    // 6. AUTOMATION & COMBAT ASSIST (Tự động hóa & Hỗ trợ chiến đấu)
+    // =========================================================================
+    function triggerSkill() {
+        if (typeof window.skillUse === 'function') {
+            window.skillUse();
+            return true;
+        }
+        // Fallback phím Space
+        window.dispatchEvent(new KeyboardEvent('keydown', { keyCode: 32, which: 32, code: 'Space', bubbles: true }));
+        setTimeout(() => {
+            window.dispatchEvent(new KeyboardEvent('keyup', { keyCode: 32, which: 32, code: 'Space', bubbles: true }));
+        }, 50);
+        return true;
+    }
+
+    function triggerBoost(enable) {
+        if (typeof window.boost === 'function') {
+            window.boost(enable);
+        } else {
+            // Fallback click chuột trái
+            if (enable) {
+                window.dispatchEvent(new MouseEvent('mousedown', { button: 0, bubbles: true }));
+            } else {
+                window.dispatchEvent(new MouseEvent('mouseup', { button: 0, bubbles: true }));
+            }
+        }
+    }
+
+    // Tự động kích hoạt khi vào chu kỳ update frame
+    function runAutomationLoop(engine) {
+        const me = engine.me;
+        if (!me || me.deleted || window.imDead || !window.joinedGame) return;
+
+        const now = Date.now();
+
+        // 6.1 Auto-Skill khẩn cấp khi máu thấp (Emergency Skill)
+        if (settings.autoSkillEmergency && now - lastAutoSkillTime > 2500) {
+            let hpRatio = 1.0;
+            if (typeof me.health === 'number' && typeof me.maxHealth === 'number' && me.maxHealth > 0) {
+                hpRatio = me.health / me.maxHealth;
+            } else if (typeof me.hp === 'number' && typeof me.maxHp === 'number' && me.maxHp > 0) {
+                hpRatio = me.hp / me.maxHp;
+            }
+
+            if (hpRatio <= (settings.autoSkillHpPercent / 100)) {
+                const skillReady = !me.skill || !me.skill.cooldown;
+                if (skillReady) {
+                    console.log('[EvoWorld-Mod] ⚠️ Máu nguy hiểm (' + Math.round(hpRatio * 100) + '%), Tự động kích hoạt Kỹ Năng!');
+                    triggerSkill();
+                    lastAutoSkillTime = now;
+                }
+            }
+        }
+
+        // 6.2 Macro Auto Boost nhấp nhả thông minh khi giữ phím Shift hoặc chuột phải
+        if (settings.autoBoostMacro && isHoldingRightClick) {
+            if (now - lastBoostToggleTime > 120) {
+                autoBoostActive = !autoBoostActive;
+                triggerBoost(autoBoostActive);
+                lastBoostToggleTime = now;
+            }
+        }
+    }
+
+    // Bắt sự kiện giữ chuột phải để kích hoạt Auto Boost Macro
+    window.addEventListener('mousedown', (e) => {
+        if (e.button === 2) {
+            isHoldingRightClick = true;
+        }
+    });
+    window.addEventListener('mouseup', (e) => {
+        if (e.button === 2) {
+            isHoldingRightClick = false;
+            triggerBoost(false);
+        }
+    });
+
+    // =========================================================================
+    // 7. ESP OVERLAY, LASER AIM, RADAR NƯỚC & THIÊN ĐỊCH
     // =========================================================================
     function getDistance(x1, y1, x2, y2) {
         const dx = x1 - x2;
@@ -224,6 +317,9 @@
         let nearestFood = null;
         let minFoodDist = 999999;
 
+        let nearestWater = null;
+        let minWaterDist = 999999;
+
         const allObjects = engine.gameObjects || {};
 
         ctx.save();
@@ -236,7 +332,31 @@
             const targetCenter = targetPos.center;
             const dist = getDistance(myCenter.x, myCenter.y, targetCenter.x, targetCenter.y);
 
-            // Kiểm tra thiên địch / thức ăn qua hàm chuẩn của game hoặc checkFoodChain
+            // Nhận diện nguồn nước / mây nước
+            if (obj.type === 2 || obj.type === 3 || obj.name === 'water' || obj.name === 'cloud' || (obj.texture && typeof obj.texture.indexOf === 'function' && obj.texture.indexOf('water') !== -1)) {
+                if (dist < minWaterDist) {
+                    minWaterDist = dist;
+                    nearestWater = { obj, dist, center: targetCenter };
+                }
+            }
+
+            // Nhận diện vùng ẩn nấp Safe Zone
+            if (settings.showSafeZones && (obj.type === 4 || obj.name === 'hide' || (obj.texture && typeof obj.texture.indexOf === 'function' && obj.texture.indexOf('hide') !== -1))) {
+                if (dist < 1500) {
+                    const renderPos = engine.getRenderPosition(targetCenter.x, targetCenter.y);
+                    ctx.strokeStyle = '#38bdf8';
+                    ctx.lineWidth = 1.5;
+                    ctx.setLineDash([4, 4]);
+                    ctx.strokeRect(renderPos.x - 30, renderPos.y - 30, 60, 60);
+                    ctx.font = '10px sans-serif';
+                    ctx.fillStyle = '#38bdf8';
+                    ctx.textAlign = 'center';
+                    ctx.fillText('Nơi Nấp [Safe]', renderPos.x, renderPos.y - 35);
+                    ctx.setLineDash([]);
+                }
+            }
+
+            // Phân loại Thiên Địch / Thức Ăn
             let isPredator = false;
             let isFood = false;
 
@@ -248,7 +368,6 @@
                     isFood = true;
                 }
             } else {
-                // Fallback nếu không có checkFoodChain
                 if (obj.outline === 'red') isPredator = true;
                 if (obj.outline === '#00cc44' || obj.outline === 'orange') isFood = true;
             }
@@ -269,50 +388,85 @@
             if (settings.espPlayers && obj.type === 1) { // objectType.PLAYER === 1
                 const renderPos = engine.getRenderPosition(targetCenter.x, targetCenter.y);
                 const isThreat = isPredator;
-                const strokeColor = isThreat ? '#ff2b2b' : (isFood ? '#00e676' : '#29b6f6');
+                const strokeColor = isThreat ? '#ff2b2b' : (isFood ? '#00e676' : '#38bdf8');
 
-                // Vẽ vòng tròn xung quanh người chơi
+                // Vòng tròn ESP
                 ctx.beginPath();
                 ctx.arc(renderPos.x, renderPos.y, Math.max(obj.width, obj.height) * engine.scaleX * engine.zoom * 0.7, 0, Math.PI * 2);
                 ctx.strokeStyle = strokeColor;
                 ctx.lineWidth = isThreat ? 3 : 1.5;
                 ctx.stroke();
 
-                // Hiển thị Tên + Khoảng cách
-                ctx.font = `bold ${Math.round(11 * (engine.zoom || 1))}px sans-serif`;
+                // Tên & Khoảng cách
+                ctx.font = `bold ${Math.max(10, Math.round(11 * (engine.zoom || 1)))}px sans-serif`;
                 ctx.fillStyle = strokeColor;
                 ctx.textAlign = 'center';
                 const label = `${obj.nick || obj.name || 'Player'} [${Math.round(dist)}]`;
                 ctx.fillText(label, renderPos.x, renderPos.y - (obj.height * engine.scaleY * engine.zoom * 0.8));
+
+                // Hiển thị thanh máu đối thủ nếu có dữ liệu
+                if (obj.health && obj.maxHealth) {
+                    const barW = 50 * engine.zoom;
+                    const barH = 5 * engine.zoom;
+                    const barX = renderPos.x - barW / 2;
+                    const barY = renderPos.y - (obj.height * engine.scaleY * engine.zoom * 0.8) - 12;
+                    const pct = Math.max(0, Math.min(1, obj.health / obj.maxHealth));
+
+                    ctx.fillStyle = 'rgba(0,0,0,0.6)';
+                    ctx.fillRect(barX, barY, barW, barH);
+                    ctx.fillStyle = isThreat ? '#ef4444' : '#22c55e';
+                    ctx.fillRect(barX, barY, barW * pct, barH);
+                }
             }
         }
 
-        // Vẽ đường chỉ hướng và radar cảnh báo Thiên Địch Gần Nhất (Danger Line)
+        // 7.1 Laser Aim Guide (Tia ngắm săn mồi chuẩn xác)
+        if (settings.laserAim && me.rotation !== undefined) {
+            const rot = me.rotation;
+            const aimDist = 280 * (engine.zoom || 1);
+            const aimEndX = myRenderPos.x + Math.cos(rot) * aimDist;
+            const aimEndY = myRenderPos.y + Math.sin(rot) * aimDist;
+
+            ctx.strokeStyle = 'rgba(2, 132, 199, 0.75)';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([6, 3]);
+            ctx.beginPath();
+            ctx.moveTo(myRenderPos.x, myRenderPos.y);
+            ctx.lineTo(aimEndX, aimEndY);
+            ctx.stroke();
+            ctx.setLineDash([]);
+
+            // Tâm ngắm ở đầu mũi tia laser
+            ctx.beginPath();
+            ctx.arc(aimEndX, aimEndY, 6, 0, Math.PI * 2);
+            ctx.fillStyle = '#0284c7';
+            ctx.fill();
+        }
+
+        // 7.2 Cảnh báo Thiên Địch Gần Nhất (Danger Line & Alert Banner)
         if (settings.predatorAlert && nearestPredator) {
             const pred = nearestPredator;
             const predRenderPos = engine.getRenderPosition(pred.center.x, pred.center.y);
 
-            // Đường chỉ đỏ nét đứt nối từ ta đến kẻ săn mồi
             ctx.setLineDash([8, 6]);
             ctx.strokeStyle = '#ff1744';
-            ctx.lineWidth = 2.5;
+            ctx.lineWidth = 3;
             ctx.beginPath();
             ctx.moveTo(myRenderPos.x, myRenderPos.y);
             ctx.lineTo(predRenderPos.x, predRenderPos.y);
             ctx.stroke();
-            ctx.setLineDash([]); // Reset line dash
+            ctx.setLineDash([]);
 
-            // Cảnh báo nếu thiên địch ở khoảng cách nguy hiểm (< 1200px)
-            if (pred.dist < 1200) {
+            if (pred.dist < 1400) {
                 ctx.font = 'bold 18px "Segoe UI", Tahoma, sans-serif';
                 ctx.fillStyle = '#ff1744';
                 ctx.textAlign = 'center';
-                const alertText = `⚠️ NGUY HIỂM: ${pred.obj.nick || pred.obj.name} [${Math.round(pred.dist)}m]!`;
+                const alertText = `⚠️ THIÊN ĐỊCH: ${pred.obj.nick || pred.obj.name} [${Math.round(pred.dist)}px]!`;
                 ctx.fillText(alertText, engine.canvas.width / 2, 70);
             }
         }
 
-        // Vẽ đường chỉ hướng Thức Ăn Gần Nhất (Green Line)
+        // 7.3 Radar Thức Ăn Gần Nhất (Green Line)
         if (settings.foodRadar && nearestFood && minFoodDist > 90) {
             const food = nearestFood;
             const foodRenderPos = engine.getRenderPosition(food.center.x, food.center.y);
@@ -327,11 +481,35 @@
             ctx.setLineDash([]);
         }
 
+        // 7.4 Cảnh Báo Nước Khẩn Cấp (Emergency Water Warning & Guide Path)
+        if (settings.emergencyWaterAlert) {
+            let waterLevel = 100;
+            if (typeof window.lastWater === 'number') waterLevel = window.lastWater;
+            if (waterLevel <= settings.emergencyWaterThreshold) {
+                ctx.font = 'bold 17px "Segoe UI", Tahoma, sans-serif';
+                ctx.fillStyle = '#0ea5e9';
+                ctx.textAlign = 'center';
+                ctx.fillText(`💧 NƯỚC SẮP CẠN (${Math.round(waterLevel)}%)!`, engine.canvas.width / 2, 100);
+
+                if (nearestWater) {
+                    const waterRenderPos = engine.getRenderPosition(nearestWater.center.x, nearestWater.center.y);
+                    ctx.setLineDash([4, 4]);
+                    ctx.strokeStyle = '#0284c7';
+                    ctx.lineWidth = 2.5;
+                    ctx.beginPath();
+                    ctx.moveTo(myRenderPos.x, myRenderPos.y);
+                    ctx.lineTo(waterRenderPos.x, waterRenderPos.y);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                }
+            }
+        }
+
         ctx.restore();
     }
 
     // =========================================================================
-    // 7. GIAO DIỆN ĐIỀU KHIỂN NỔI (MOD CONTROLLER UI - WHITE/BLUE THEME)
+    // 8. GIAO DIỆN ĐIỀU KHIỂN NỔI (MOD CONTROLLER UI - WHITE/BLUE THEME)
     // =========================================================================
     function injectUI() {
         if (document.getElementById('evo-mod-container')) return;
@@ -348,16 +526,16 @@
                 user-select: none;
             }
             #evo-mod-panel {
-                width: 290px;
+                width: 320px;
                 background: #ffffff;
                 border: 1px solid #cbd5e1;
-                border-radius: 12px;
-                box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
+                border-radius: 14px;
+                box-shadow: 0 12px 30px -5px rgba(0, 0, 0, 0.15), 0 8px 10px -6px rgba(0, 0, 0, 0.1);
                 overflow: hidden;
                 transition: transform 0.2s ease, opacity 0.2s ease;
             }
             .evo-header {
-                background: #0284c7;
+                background: linear-gradient(135deg, #0284c7 0%, #0369a1 100%);
                 color: #ffffff;
                 padding: 12px 16px;
                 display: flex;
@@ -385,7 +563,7 @@
             }
             .evo-btn-minimize:hover {
                 opacity: 1;
-                background: rgba(255, 255, 255, 0.2);
+                background: rgba(255, 255, 255, 0.25);
             }
             .evo-content {
                 padding: 14px 16px;
@@ -394,6 +572,16 @@
                 gap: 12px;
                 max-height: 80vh;
                 overflow-y: auto;
+            }
+            .evo-section-title {
+                font-size: 11px;
+                font-weight: 700;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+                color: #64748b;
+                border-bottom: 1px solid #f1f5f9;
+                padding-bottom: 4px;
+                margin-top: 4px;
             }
             .evo-row {
                 display: flex;
@@ -407,8 +595,8 @@
             .evo-switch {
                 position: relative;
                 display: inline-block;
-                width: 40px;
-                height: 22px;
+                width: 38px;
+                height: 20px;
             }
             .evo-switch input {
                 opacity: 0;
@@ -421,13 +609,13 @@
                 top: 0; left: 0; right: 0; bottom: 0;
                 background-color: #cbd5e1;
                 transition: .25s;
-                border-radius: 22px;
+                border-radius: 20px;
             }
             .evo-slider-toggle:before {
                 position: absolute;
                 content: "";
-                height: 16px;
-                width: 16px;
+                height: 14px;
+                width: 14px;
                 left: 3px;
                 bottom: 3px;
                 background-color: white;
@@ -506,12 +694,13 @@
         container.innerHTML = `
             <div id="evo-mod-panel">
                 <div class="evo-header" id="evo-drag-handle">
-                    <span>⚡ EvoWorld Pro Mod</span>
+                    <span>⚡ EvoWorld Ultimate Suite</span>
                     <button class="evo-btn-minimize" id="evo-btn-close" title="Ẩn menu">✕</button>
                 </div>
                 <div class="evo-content">
+                    <div class="evo-section-title">🔍 TẦM NHÌN & VISUAL</div>
                     <div class="evo-row">
-                        <span class="evo-label">🔍 Free Zoom (Mở Rộng Tầm Nhìn)</span>
+                        <span class="evo-label">Free Zoom Toàn Cảnh</span>
                         <label class="evo-switch">
                             <input type="checkbox" id="evo-chk-zoom" ${settings.freeZoom ? 'checked' : ''}>
                             <span class="evo-slider-toggle"></span>
@@ -520,7 +709,7 @@
 
                     <div class="evo-slider-container">
                         <div class="evo-row">
-                            <span style="font-size: 11px; color: #64748b;">Mức Zoom Hiện Tại:</span>
+                            <span style="font-size: 11px; color: #64748b;">Mức Zoom:</span>
                             <span id="evo-zoom-val" style="font-weight: 700; color: #0284c7;">${settings.customZoom.toFixed(2)}x</span>
                         </div>
                         <input type="range" class="evo-slider-bar" id="evo-range-zoom" min="0.25" max="3.0" step="0.05" value="${settings.customZoom}">
@@ -535,6 +724,15 @@
                     </div>
 
                     <div class="evo-row">
+                        <span class="evo-label">📦 Hiện Hitbox Va Chạm</span>
+                        <label class="evo-switch">
+                            <input type="checkbox" id="evo-chk-hitbox" ${settings.showHitboxes ? 'checked' : ''}>
+                            <span class="evo-slider-toggle"></span>
+                        </label>
+                    </div>
+
+                    <div class="evo-section-title">🎯 RADAR & TÁC CHIẾN</div>
+                    <div class="evo-row">
                         <span class="evo-label">⚠️ Cảnh Báo Thiên Địch</span>
                         <label class="evo-switch">
                             <input type="checkbox" id="evo-chk-predator" ${settings.predatorAlert ? 'checked' : ''}>
@@ -543,7 +741,7 @@
                     </div>
 
                     <div class="evo-row">
-                        <span class="evo-label">🍎 Radar Thức Ăn Gần Nhất</span>
+                        <span class="evo-label">🍎 Radar Thức Ăn Gần</span>
                         <label class="evo-switch">
                             <input type="checkbox" id="evo-chk-food" ${settings.foodRadar ? 'checked' : ''}>
                             <span class="evo-slider-toggle"></span>
@@ -551,23 +749,56 @@
                     </div>
 
                     <div class="evo-row">
-                        <span class="evo-label">🎯 ESP Người Chơi & Tên</span>
+                        <span class="evo-label">🏹 Laser Aim Guide (Tia Ngắm)</span>
+                        <label class="evo-switch">
+                            <input type="checkbox" id="evo-chk-laser" ${settings.laserAim ? 'checked' : ''}>
+                            <span class="evo-slider-toggle"></span>
+                        </label>
+                    </div>
+
+                    <div class="evo-row">
+                        <span class="evo-label">🛡️ ESP Safe Zone (Bụi Ẩn Nấp)</span>
+                        <label class="evo-switch">
+                            <input type="checkbox" id="evo-chk-safezone" ${settings.showSafeZones ? 'checked' : ''}>
+                            <span class="evo-slider-toggle"></span>
+                        </label>
+                    </div>
+
+                    <div class="evo-row">
+                        <span class="evo-label">👥 ESP Người Chơi & Máu</span>
                         <label class="evo-switch">
                             <input type="checkbox" id="evo-chk-esp" ${settings.espPlayers ? 'checked' : ''}>
                             <span class="evo-slider-toggle"></span>
                         </label>
                     </div>
 
+                    <div class="evo-section-title">🤖 TỰ ĐỘNG HÓA & SINH TỒN</div>
                     <div class="evo-row">
-                        <span class="evo-label">📦 Hiện Hitbox (Va Chạm)</span>
+                        <span class="evo-label">✨ Auto-Skill Khi Máu Thấp</span>
                         <label class="evo-switch">
-                            <input type="checkbox" id="evo-chk-hitbox" ${settings.showHitboxes ? 'checked' : ''}>
+                            <input type="checkbox" id="evo-chk-autoskill" ${settings.autoSkillEmergency ? 'checked' : ''}>
                             <span class="evo-slider-toggle"></span>
                         </label>
                     </div>
 
                     <div class="evo-row">
-                        <span class="evo-label">🛡️ Anti-Tab Throttle (Treo Ngầm)</span>
+                        <span class="evo-label">🚀 Chuột Phải Auto-Boost</span>
+                        <label class="evo-switch">
+                            <input type="checkbox" id="evo-chk-autoboost" ${settings.autoBoostMacro ? 'checked' : ''}>
+                            <span class="evo-slider-toggle"></span>
+                        </label>
+                    </div>
+
+                    <div class="evo-row">
+                        <span class="evo-label">💧 Radar Dẫn Nước Khẩn Cấp</span>
+                        <label class="evo-switch">
+                            <input type="checkbox" id="evo-chk-water" ${settings.emergencyWaterAlert ? 'checked' : ''}>
+                            <span class="evo-slider-toggle"></span>
+                        </label>
+                    </div>
+
+                    <div class="evo-row">
+                        <span class="evo-label">⚡ Anti-Tab Throttle (Treo Ngầm)</span>
                         <label class="evo-switch">
                             <input type="checkbox" id="evo-chk-throttle" ${settings.antiThrottle ? 'checked' : ''}>
                             <span class="evo-slider-toggle"></span>
@@ -575,21 +806,19 @@
                     </div>
                 </div>
                 <div class="evo-footer">
-                    <span>Phím tắt: <b>H</b> bật/tắt menu</span>
-                    <span class="evo-badge">v1.0.0</span>
+                    <span>Phím tắt: <b>H</b> bật/tắt</span>
+                    <span class="evo-badge">v2.0.0</span>
                 </div>
             </div>
         `;
         document.body.appendChild(container);
 
-        // Nút tròn bật nhanh khi menu bị ẩn
         const toggleBtn = document.createElement('button');
         toggleBtn.id = 'evo-toggle-btn';
         toggleBtn.innerHTML = '⚡';
         toggleBtn.title = 'Bật/Tắt Menu EvoWorld Mod (Phím H)';
         document.body.appendChild(toggleBtn);
 
-        // Gán sự kiện
         setupUIEvents();
     }
 
@@ -608,10 +837,8 @@
         if (closeBtn) closeBtn.onclick = () => setMenuVisible(false);
         if (toggleBtn) toggleBtn.onclick = () => setMenuVisible(true);
 
-        // Khởi tạo trạng thái ban đầu
         setMenuVisible(settings.menuVisible);
 
-        // Phím tắt H để bật tắt nhanh Menu
         window.addEventListener('keydown', (e) => {
             if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
             if (e.key === 'h' || e.key === 'H') {
@@ -619,14 +846,19 @@
             }
         });
 
-        // Bắt sự kiện checkbox & slider
+        // Bắt các element tương tác
         const chkZoom = document.getElementById('evo-chk-zoom');
         const rangeZoom = document.getElementById('evo-range-zoom');
         const chkDarkness = document.getElementById('evo-chk-darkness');
+        const chkHitbox = document.getElementById('evo-chk-hitbox');
         const chkPredator = document.getElementById('evo-chk-predator');
         const chkFood = document.getElementById('evo-chk-food');
+        const chkLaser = document.getElementById('evo-chk-laser');
+        const chkSafezone = document.getElementById('evo-chk-safezone');
         const chkEsp = document.getElementById('evo-chk-esp');
-        const chkHitbox = document.getElementById('evo-chk-hitbox');
+        const chkAutoSkill = document.getElementById('evo-chk-autoskill');
+        const chkAutoBoost = document.getElementById('evo-chk-autoboost');
+        const chkWater = document.getElementById('evo-chk-water');
         const chkThrottle = document.getElementById('evo-chk-throttle');
 
         if (chkZoom) chkZoom.onchange = (e) => { settings.freeZoom = e.target.checked; saveSettings(); };
@@ -640,13 +872,17 @@
         };
 
         if (chkDarkness) chkDarkness.onchange = (e) => { settings.noDarkness = e.target.checked; saveSettings(); };
+        if (chkHitbox) chkHitbox.onchange = (e) => { settings.showHitboxes = e.target.checked; saveSettings(); };
         if (chkPredator) chkPredator.onchange = (e) => { settings.predatorAlert = e.target.checked; saveSettings(); };
         if (chkFood) chkFood.onchange = (e) => { settings.foodRadar = e.target.checked; saveSettings(); };
+        if (chkLaser) chkLaser.onchange = (e) => { settings.laserAim = e.target.checked; saveSettings(); };
+        if (chkSafezone) chkSafezone.onchange = (e) => { settings.showSafeZones = e.target.checked; saveSettings(); };
         if (chkEsp) chkEsp.onchange = (e) => { settings.espPlayers = e.target.checked; saveSettings(); };
-        if (chkHitbox) chkHitbox.onchange = (e) => { settings.showHitboxes = e.target.checked; saveSettings(); };
+        if (chkAutoSkill) chkAutoSkill.onchange = (e) => { settings.autoSkillEmergency = e.target.checked; saveSettings(); };
+        if (chkAutoBoost) chkAutoBoost.onchange = (e) => { settings.autoBoostMacro = e.target.checked; saveSettings(); };
+        if (chkWater) chkWater.onchange = (e) => { settings.emergencyWaterAlert = e.target.checked; saveSettings(); };
         if (chkThrottle) chkThrottle.onchange = (e) => { settings.antiThrottle = e.target.checked; saveSettings(); };
 
-        // Kéo thả Menu
         dragElement(document.getElementById('evo-mod-container'), document.getElementById('evo-drag-handle'));
     }
 
@@ -695,7 +931,6 @@
         }
     }
 
-    // Đợi DOM sẵn sàng để chèn UI
     if (document.readyState === 'loading') {
         document.addEventListener('DOMContentLoaded', injectUI);
     } else {
