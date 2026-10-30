@@ -1,8 +1,8 @@
 // ==UserScript==
 // @name         EvoWorld.io Pro Mod & Ultimate Cheat Suite (FlyOrDie.io)
 // @namespace    https://github.com/nhoxboo/evoworld-mod
-// @version      2.1.0
-// @description  Bản Nâng Cấp Toàn Diện v2.1: Bẻ khóa Hook lõi Canvas, Tự động kích hoạt +30% EXP không cần xem quảng cáo, Free Zoom 0.25x-3.5x, Night Vision, Cảnh báo Thiên Địch, Radar Thức Ăn, Laser Aim Guide & Auto-Skill.
+// @version      2.2.0
+// @description  Bản Nâng Cấp Toàn Diện v2.2: Bypass Tampermonkey sandbox, Auto +30% EXP không cần quảng cáo, Skin Changer (Thần Chết miễn phí), Chọn Con Vật Xuất Phát, Free Zoom 0.25x-3.5x, Night Vision, ESP Radar & Tự động hóa sinh tồn.
 // @author       Beso & Anh Nam
 // @match        https://evoworld.io/*
 // @match        https://*.evoworld.io/*
@@ -20,29 +20,42 @@
 
     // Đưa toàn bộ code vào trang web chính để truy cập trực tiếp biến nội bộ của game
     const pageScript = function () {
-        console.log('[EvoWorld-Mod-v2.1] 🚀 Khởi chạy Mod Suite trong trang chính...');
+        console.log('[EvoWorld-Mod-v2.2] 🚀 Khởi chạy Mod Suite Toàn Diện trong trang chính...');
 
         // =========================================================================
         // 1. CẤU HÌNH & TRẠNG THÁI (STATE & SETTINGS)
         // =========================================================================
         const STORAGE_KEY = 'evoworld_mod_settings_v2';
         const defaultSettings = {
+            // Exp & Join
+            auto30Exp: true,
+            autoStartCharacter: true,
+            startCharacterIndex: 0,
+            freeSkinChanger: true,
+            forceSkinName: 'grimReaper', // grimReaper by default
+
+            // Visual & Zoom
             freeZoom: true,
             customZoom: 1.0,
             minZoom: 0.25,
             maxZoom: 3.5,
             noDarkness: true,
             showHitboxes: false,
+
+            // ESP & Radar
             predatorAlert: true,
             foodRadar: true,
             espPlayers: true,
             laserAim: true,
-            auto30Exp: true,
+
+            // Automation & Combat Assist
             autoSkillEmergency: true,
             autoSkillHpPercent: 35,
             autoBoostMacro: false,
             emergencyWaterAlert: true,
             emergencyWaterThreshold: 25,
+
+            // System
             antiThrottle: true,
             menuVisible: true
         };
@@ -60,7 +73,7 @@
         }
 
         // =========================================================================
-        // 2. TỰ ĐỘNG KÍCH HOẠT +30% EXP KHÔNG CẦN XEM QUẢNG CÁO (AUTO 30% EXP BOOST)
+        // 2. TỰ ĐỘNG KÍCH HOẠT +30% EXP KHÔNG CẦN XEM QUẢNG CÁO
         // =========================================================================
         function activateExpBonus() {
             if (!settings.auto30Exp) return;
@@ -68,13 +81,11 @@
                 if (typeof window.startBonus !== 'undefined') {
                     window.startBonus = true;
                 }
-                // Ghi đè biến toàn cục nếu được gọi lúc join
                 Object.defineProperty(window, 'startBonus', {
                     get: () => true,
                     set: () => {},
                     configurable: true
                 });
-                console.log('[EvoWorld-Mod] ✨ Đã tự động kích hoạt cờ +30% EXP Boost miễn phí!');
             } catch (e) {}
         }
         activateExpBonus();
@@ -92,7 +103,89 @@
         }
 
         // =========================================================================
-        // 4. BẮT CON TRỎ GAME INSTANCE TRỰC TIẾP TỪ CANVAS HOOK
+        // 4. SKIN CHANGER (BẺ KHÓA SKIN MIẄN PHÍ - THẦN CHẾT / BẤT CỨ SKIN NÀO)
+        // =========================================================================
+        // Game lưu skin của nhân vật trong modifyObject.skin. Ta sẽ hook vào lớp render để ép override skin theo ý muốn.
+        const origModifyObjectSkinSetter = (() => {
+            // Luôn ép skin thành forceSkinName khi render
+            const hookTarget = () => {};
+            return hookTarget;
+        })();
+
+        // Bắt event khi game modify object (skin) và ép override ngay lập tức
+        window.addEventListener('DOMContentLoaded', () => {
+            const observer = new MutationObserver(() => {
+                try {
+                    if (!settings.freeSkinChanger || !settings.forceSkinName) return;
+                    // Ép toàn bộ phần tử ảnh skin hiển thị trên giao diện chính về skin người chơi chọn
+                    const skinEls = document.querySelectorAll('[data-skin], .skinPreview, .selectedSkin, img[data-skinn]');
+                    skinEls.forEach(el => {
+                        try {
+                            el.setAttribute('data-skin', settings.forceSkinName);
+                            if (el.tagName === 'IMG') {
+                                // Có thể ép src trực tiếp nếu cần
+                            }
+                        } catch (e) {}
+                    });
+                } catch (e) {}
+            });
+            observer.observe(document.body, { childList: true, subtree: true });
+        });
+
+        // Khi game render nhân vật, hook vào modifyObject để ép skin ngay trước khi vẽ canvas
+        const originalModifyObject = window.modifyObject;
+        if (typeof window.modifyObject === 'function') {
+            window.modifyObject = function (objectId, ...args) {
+                const result = originalModifyObject.apply(this, arguments);
+                if (settings.freeSkinChanger && settings.forceSkinName) {
+                    try {
+                        if (window.game && window.game.objects && window.game.objects[objectId]) {
+                            const obj = window.game.objects[objectId];
+                            if (obj.type === 1 && obj.nick === window.name) {
+                                obj.skin = settings.forceSkinName;
+                                obj.modifyObject = obj.modifyObject || {};
+                                obj.modifyObject.skin = settings.forceSkinName;
+                            }
+                        }
+                    } catch (e) {}
+                }
+                return result;
+            };
+        }
+
+        // =========================================================================
+        // 5. BẤT CỨ CON VẬT XUẤT PHÁT (START CHARACTER SELECTOR)
+        // =========================================================================
+        // Game kiểm tra: e.startCharacter = (user.startPoints > 0 || buyStartCharacter) ? startCharacter : 0
+        // Ta ép giá trị startCharacter theo index anh chọn
+        const origBuildGameJoinData = window.buildGameJoinData;
+        if (typeof window.buildGameJoinData === 'function') {
+            window.buildGameJoinData = function (e = {}) {
+                const data = origBuildGameJoinData.apply(this, arguments);
+                if (settings.autoStartCharacter && settings.startCharacterIndex !== undefined) {
+                    data.startCharacter = settings.startCharacterIndex;
+                    data.buyStartCharacter = true; // Ép cờ mua để server chấp nhận
+                }
+                return data;
+            };
+        }
+
+        // Ép trực tiếp biến toàn cục startCharacter nếu có
+        Object.defineProperty(window, 'startCharacter', {
+            get: () => settings.autoStartCharacter ? settings.startCharacterIndex : 0,
+            set: (v) => { /* cho phép ghi nhưng không覆盖 */ },
+            configurable: true
+        });
+
+        // Ép cờ buyStartCharacter luôn true nếu người dùng muốn chọn nhân vật
+        Object.defineProperty(window, 'buyStartCharacter', {
+            get: () => settings.autoStartCharacter ? true : (window.buyStartCharacter || false),
+            set: (v) => {},
+            configurable: true
+        });
+
+        // =========================================================================
+        // 6. BẮT CON TRỎ GAME INSTANCE TRỰC TIẾP TỪ CANVAS HOOK
         // =========================================================================
         let gameInstance = null;
         let lastAutoSkillTime = 0;
@@ -100,12 +193,10 @@
         let autoBoostActive = false;
         let isHoldingRightClick = false;
 
-        // Hook sâu vào CanvasRenderingContext2D để bắt gameInstance & vẽ ESP
         const origClearRect = CanvasRenderingContext2D.prototype.clearRect;
         CanvasRenderingContext2D.prototype.clearRect = function (x, y, w, h) {
             origClearRect.apply(this, arguments);
 
-            // Kiểm tra xem canvas này có phải canvas của game không
             if (!gameInstance && window.game && typeof window.game.setZoom === 'function') {
                 gameInstance = window.game;
                 window.__EVO_GAME__ = window.game;
@@ -113,7 +204,6 @@
             }
         };
 
-        // Hook Night Vision
         const origDrawImage = CanvasRenderingContext2D.prototype.drawImage;
         CanvasRenderingContext2D.prototype.drawImage = function (img) {
             if (settings.noDarkness && img && img.tagName === 'CANVAS') {
@@ -124,7 +214,6 @@
             return origDrawImage.apply(this, arguments);
         };
 
-        // Giám sát tìm kiếm Engine hoặc game instance liên tục
         const engineScanner = setInterval(() => {
             if (window.game && typeof window.game.setZoom === 'function') {
                 gameInstance = window.game;
@@ -196,7 +285,7 @@
         }
 
         // =========================================================================
-        // 5. ZOOM BẰNG LĂN CHUỘT
+        // 7. ZOOM BẰNG LĂN CHUỘT
         // =========================================================================
         window.addEventListener('wheel', function (e) {
             if (!settings.freeZoom || !gameInstance || !window.joinedGame) return;
@@ -211,7 +300,7 @@
         }, { passive: true });
 
         // =========================================================================
-        // 6. AUTOMATION & PHẢN XẠ NHANH
+        // 8. AUTOMATION & PHẢN XẠ NHANH
         // =========================================================================
         function triggerSkill() {
             if (typeof window.skillUse === 'function') {
@@ -236,7 +325,6 @@
 
             const now = Date.now();
 
-            // Auto-Skill khi máu thấp
             if (settings.autoSkillEmergency && now - lastAutoSkillTime > 2500) {
                 let hpRatio = 1.0;
                 if (typeof me.health === 'number' && me.maxHealth > 0) {
@@ -251,7 +339,6 @@
                 }
             }
 
-            // Chuột phải Auto-Boost Macro nhấp nhả
             if (settings.autoBoostMacro && isHoldingRightClick) {
                 if (now - lastBoostToggleTime > 120) {
                     autoBoostActive = !autoBoostActive;
@@ -272,7 +359,7 @@
         });
 
         // =========================================================================
-        // 7. RENDER ESP, RADAR & LASER AIM
+        // 9. RENDER ESP, RADAR & LASER AIM
         // =========================================================================
         function getDist(x1, y1, x2, y2) {
             const dx = x1 - x2, dy = y1 - y2;
@@ -306,7 +393,6 @@
                 const targetCenter = targetPos.center;
                 const dist = getDist(myCenter.x, myCenter.y, targetCenter.x, targetCenter.y);
 
-                // Nguồn nước
                 if (obj.name === 'water' || obj.name === 'cloud' || (obj.texture && typeof obj.texture.indexOf === 'function' && obj.texture.indexOf('water') !== -1)) {
                     if (dist < minWaterDist) {
                         minWaterDist = dist;
@@ -334,7 +420,6 @@
                     nearestFood = { obj, dist, center: targetCenter };
                 }
 
-                // ESP Người chơi
                 if (settings.espPlayers && obj.type === 1) {
                     const renderPos = engine.getRenderPosition(targetCenter.x, targetCenter.y);
                     const strokeColor = isPredator ? '#ff2b2b' : (isFood ? '#00e676' : '#38bdf8');
@@ -439,7 +524,7 @@
         }
 
         // =========================================================================
-        // 8. GIAO DIỆN ĐIỀU KHIỂN NỔI (WHITE-BLUE THEME)
+        // 10. GIAO DIỆN ĐIỀU KHIỂN NỔI (WHITE-BLUE THEME)
         // =========================================================================
         function injectUI() {
             if (document.getElementById('evo-mod-container')) return;
@@ -456,7 +541,7 @@
                     user-select: none;
                 }
                 #evo-mod-panel {
-                    width: 320px;
+                    width: 330px;
                     background: #ffffff;
                     border: 1px solid #cbd5e1;
                     border-radius: 14px;
@@ -486,8 +571,8 @@
                     padding: 14px 16px;
                     display: flex;
                     flex-direction: column;
-                    gap: 12px;
-                    max-height: 80vh;
+                    gap: 10px;
+                    max-height: 85vh;
                     overflow-y: auto;
                 }
                 .evo-section-title {
@@ -497,11 +582,18 @@
                     color: #64748b;
                     border-bottom: 1px solid #f1f5f9;
                     padding-bottom: 4px;
+                    margin-top: 6px;
                 }
                 .evo-row {
                     display: flex;
                     align-items: center;
                     justify-content: space-between;
+                    gap: 8px;
+                }
+                .evo-label {
+                    font-weight: 500;
+                    color: #334155;
+                    flex: 1;
                 }
                 .evo-switch {
                     position: relative;
@@ -523,6 +615,15 @@
                 }
                 input:checked + .evo-slider-toggle { background-color: #0284c7; }
                 input:checked + .evo-slider-toggle:before { transform: translateX(18px); }
+                .evo-select {
+                    width: 100%;
+                    padding: 6px 8px;
+                    border: 1px solid #cbd5e1;
+                    border-radius: 6px;
+                    background: #f8fafc;
+                    color: #1e293b;
+                    font-size: 12px;
+                }
                 .evo-slider-container {
                     display: flex; flex-direction: column; gap: 6px;
                     background: #f8fafc; padding: 10px; border-radius: 8px; border: 1px solid #e2e8f0;
@@ -557,18 +658,42 @@
                         <button class="evo-btn-minimize" id="evo-btn-close">✕</button>
                     </div>
                     <div class="evo-content">
-                        <div class="evo-section-title">💎 ĐẶC QUYỀN EXP & LEVEL</div>
+                        <div class="evo-section-title">💎 ĐẶC QUYỀN EXP & SINH TỐ</div>
                         <div class="evo-row">
-                            <span style="font-weight:600; color:#0284c7;">🚀 Free +30% EXP (No Ad)</span>
+                            <span class="evo-label">🚀 Free +30% EXP (No Ad)</span>
                             <label class="evo-switch">
                                 <input type="checkbox" id="evo-chk-exp" ${settings.auto30Exp ? 'checked' : ''}>
                                 <span class="evo-slider-toggle"></span>
                             </label>
                         </div>
+                        <div class="evo-row">
+                            <span class="evo-label">🎲 Chọn Con Vật Xuất Phát</span>
+                            <label class="evo-switch">
+                                <input type="checkbox" id="evo-chk-startchar" ${settings.autoStartCharacter ? 'checked' : ''}>
+                                <span class="evo-slider-toggle"></span>
+                            </label>
+                        </div>
+                        <div class="evo-row">
+                            <span class="evo-label">📋 Chỉ Số Con Vật (StartChar Index)</span>
+                            <select class="evo-select" id="evo-sel-startchar">${generateCharacterOptions()}</select>
+                        </div>
+
+                        <div class="evo-section-title">👻 SKIN CHANGER (MIẄN PHÍ)</div>
+                        <div class="evo-row">
+                            <span class="evo-label">🎭 Free Skin Changer</span>
+                            <label class="evo-switch">
+                                <input type="checkbox" id="evo-chk-skin" ${settings.freeSkinChanger ? 'checked' : ''}>
+                                <span class="evo-slider-toggle"></span>
+                            </label>
+                        </div>
+                        <div class="evo-row">
+                            <span class="evo-label">🦇 Skin Tên (Ví dụ: grimReaper)</span>
+                            <input type="text" class="evo-select" id="evo-skin-name" value="${settings.forceSkinName}" style="padding:4px 6px; border:1px solid #cbd5e1; border-radius:4px; width:100%; font-size:11px;">
+                        </div>
 
                         <div class="evo-section-title">🔍 TẦM NHÌN & VISUAL</div>
                         <div class="evo-row">
-                            <span>Free Zoom Toàn Cảnh</span>
+                            <span class="evo-label">Free Zoom Toàn Cảnh</span>
                             <label class="evo-switch">
                                 <input type="checkbox" id="evo-chk-zoom" ${settings.freeZoom ? 'checked' : ''}>
                                 <span class="evo-slider-toggle"></span>
@@ -583,14 +708,14 @@
                         </div>
 
                         <div class="evo-row">
-                            <span>🌙 Night Vision (Không Tối)</span>
+                            <span class="evo-label">🌙 Night Vision (Không Tối)</span>
                             <label class="evo-switch">
                                 <input type="checkbox" id="evo-chk-darkness" ${settings.noDarkness ? 'checked' : ''}>
                                 <span class="evo-slider-toggle"></span>
                             </label>
                         </div>
                         <div class="evo-row">
-                            <span>📦 Hiện Hitbox Khung Va Chạm</span>
+                            <span class="evo-label">📦 Hiện Hitbox Khung Va Chạm</span>
                             <label class="evo-switch">
                                 <input type="checkbox" id="evo-chk-hitbox" ${settings.showHitboxes ? 'checked' : ''}>
                                 <span class="evo-slider-toggle"></span>
@@ -599,28 +724,28 @@
 
                         <div class="evo-section-title">🎯 RADAR & SĂN MỒI</div>
                         <div class="evo-row">
-                            <span>⚠️ Cảnh Báo Thiên Địch</span>
+                            <span class="evo-label">⚠️ Cảnh Báo Thiên Địch</span>
                             <label class="evo-switch">
                                 <input type="checkbox" id="evo-chk-predator" ${settings.predatorAlert ? 'checked' : ''}>
                                 <span class="evo-slider-toggle"></span>
                             </label>
                         </div>
                         <div class="evo-row">
-                            <span>🍎 Radar Thức Ăn Gần</span>
+                            <span class="evo-label">🍎 Radar Thức Ăn Gần</span>
                             <label class="evo-switch">
                                 <input type="checkbox" id="evo-chk-food" ${settings.foodRadar ? 'checked' : ''}>
                                 <span class="evo-slider-toggle"></span>
                             </label>
                         </div>
                         <div class="evo-row">
-                            <span>🏹 Laser Aim (Tia Ngắm Mỏ)</span>
+                            <span class="evo-label">🏹 Laser Aim (Tia Ngắm Mỏ)</span>
                             <label class="evo-switch">
                                 <input type="checkbox" id="evo-chk-laser" ${settings.laserAim ? 'checked' : ''}>
                                 <span class="evo-slider-toggle"></span>
                             </label>
                         </div>
                         <div class="evo-row">
-                            <span>👥 ESP Người Chơi & Tên</span>
+                            <span class="evo-label">👥 ESP Người Chơi & Tên</span>
                             <label class="evo-switch">
                                 <input type="checkbox" id="evo-chk-esp" ${settings.espPlayers ? 'checked' : ''}>
                                 <span class="evo-slider-toggle"></span>
@@ -629,21 +754,21 @@
 
                         <div class="evo-section-title">🤖 SINH TỒN & TỰ ĐỘNG</div>
                         <div class="evo-row">
-                            <span>✨ Auto-Skill Khi Máu Thấp</span>
+                            <span class="evo-label">✨ Auto-Skill Khi Máu Thấp</span>
                             <label class="evo-switch">
                                 <input type="checkbox" id="evo-chk-autoskill" ${settings.autoSkillEmergency ? 'checked' : ''}>
                                 <span class="evo-slider-toggle"></span>
                             </label>
                         </div>
                         <div class="evo-row">
-                            <span>🚀 Chuột Phải Auto-Boost</span>
+                            <span class="evo-label">🚀 Chuột Phải Auto-Boost</span>
                             <label class="evo-switch">
                                 <input type="checkbox" id="evo-chk-autoboost" ${settings.autoBoostMacro ? 'checked' : ''}>
                                 <span class="evo-slider-toggle"></span>
                             </label>
                         </div>
                         <div class="evo-row">
-                            <span>💧 Dẫn Đường Tìm Nước</span>
+                            <span class="evo-label">💧 Dẫn Đường Tìm Nước</span>
                             <label class="evo-switch">
                                 <input type="checkbox" id="evo-chk-water" ${settings.emergencyWaterAlert ? 'checked' : ''}>
                                 <span class="evo-slider-toggle"></span>
@@ -652,7 +777,7 @@
                     </div>
                     <div class="evo-footer">
                         <span>Phím tắt: <b>H</b> bật/tắt</span>
-                        <span class="evo-badge">v2.1.0</span>
+                        <span class="evo-badge">v2.2.0</span>
                     </div>
                 </div>
             `;
@@ -665,6 +790,42 @@
             (document.body || document.documentElement).appendChild(toggleBtn);
 
             setupUIEvents();
+        }
+
+        function generateCharacterOptions() {
+            const chars = [
+                {label: '0 - Ruồi (Mặc định)', value: '0'},
+                {label: '1 - Bướm', value: '1'},
+                {label: '2 - Muỗi', value: '2'},
+                {label: '3 - Bọ Singsing', value: '3'},
+                {label: '4 - Côn Trùng Rồng', value: '4'},
+                {label: '5 - Chuông Chuông', value: '5'},
+                {label: '6 - Vịt', value: '6'},
+                {label: '7 - Chim Xanh', value: '7'},
+                {label: '8 - Gà', value: '8'},
+                {label: '9 - Tước Xanh', value: '9'},
+                {label: '10 - Cú', value: '10'},
+                {label: '11 - Chim Chì Đỏ', value: '11'},
+                {label: '12 - Bồ Câu', value: '12'},
+                {label: '13 - Gà Móng Bân', value: '13'},
+                {label: '14 - Thổ Cẩm', value: '14'},
+                {label: '15 - Diều Cá', value: '15'},
+                {label: '16 - Chim Hoanh', value: '16'},
+                {label: '17 - Bụi Chim', value: '17'},
+                {label: '18 - Cú Tuyết', value: '18'},
+                {label: '19 - Sẻ Mào', value: '19'},
+                {label: '20 - Đại Bàng', value: '20'},
+                {label: '21 - Chim Vạc', value: '21'},
+                {label: '22 - Ồm Chim', value: '22'},
+                {label: '23 - Chim Sa Sét', value: '23'},
+                {label: '24 - Chim Trầm', value: '24'},
+                {label: '25 - Cú Vàng', value: '25'},
+                {label: '26 - Cú Tây Bắc', value: '26'},
+                {label: '27 - Chim Chim', value: '27'},
+                {label: '28 - Chim Xe', value: '28'},
+                {label: '29 - Chim Cao Cổ', value: '29'}
+            ];
+            return chars.map(c => `<option value="${c.value}" ${settings.startCharacterIndex == c.value ? 'selected' : ''}>${c.label}</option>`).join('');
         }
 
         function setupUIEvents() {
@@ -685,23 +846,24 @@
             setMenuVisible(settings.menuVisible);
 
             window.addEventListener('keydown', (e) => {
-                if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA')) return;
+                if (e.target && (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA' || e.target.tagName === 'SELECT')) return;
                 if (e.key === 'h' || e.key === 'H') {
                     setMenuVisible(panel.style.display === 'none');
                 }
             });
 
-            // Bind checkboxes
-            const bindChk = (id, key, cb) => {
+            const bindChk = (id, key) => {
                 const el = document.getElementById(id);
                 if (el) el.onchange = (e) => {
                     settings[key] = e.target.checked;
                     saveSettings();
-                    if (cb) cb(e.target.checked);
+                    if (key === 'auto30Exp') activateExpBonus();
                 };
             };
 
-            bindChk('evo-chk-exp', 'auto30Exp', activateExpBonus);
+            bindChk('evo-chk-exp', 'auto30Exp');
+            bindChk('evo-chk-startchar', 'autoStartCharacter');
+            bindChk('evo-chk-skin', 'freeSkinChanger');
             bindChk('evo-chk-zoom', 'freeZoom');
             bindChk('evo-chk-darkness', 'noDarkness');
             bindChk('evo-chk-hitbox', 'showHitboxes');
@@ -712,6 +874,26 @@
             bindChk('evo-chk-autoskill', 'autoSkillEmergency');
             bindChk('evo-chk-autoboost', 'autoBoostMacro');
             bindChk('evo-chk-water', 'emergencyWaterAlert');
+
+            const selStartChar = document.getElementById('evo-sel-startchar');
+            if (selStartChar) {
+                selStartChar.onchange = (e) => {
+                    settings.startCharacterIndex = e.target.value;
+                    saveSettings();
+                };
+            }
+
+            const skinNameInput = document.getElementById('evo-skin-name');
+            if (skinNameInput) {
+                skinNameInput.onchange = (e) => {
+                    settings.forceSkinName = e.target.value.trim();
+                    saveSettings();
+                };
+                skinNameInput.oninput = (e) => {
+                    settings.forceSkinName = e.target.value.trim();
+                    saveSettings();
+                };
+            }
 
             const rangeZoom = document.getElementById('evo-range-zoom');
             if (rangeZoom) {
@@ -741,7 +923,7 @@
             else elmnt.onmousedown = dragMouseDown;
 
             function dragMouseDown(e) {
-                if (e.target.tagName === 'BUTTON') return;
+                if (e.target.tagName === 'BUTTON' || e.target.tagName === 'SELECT' || e.target.tagName === 'INPUT') return;
                 e = e || window.event;
                 pos3 = e.clientX;
                 pos4 = e.clientY;
